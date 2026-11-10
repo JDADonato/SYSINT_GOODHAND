@@ -5,7 +5,7 @@
 | Phase | Description | Status |
 |---|---|---|
 | Phase 0 | Preflight, clone site / fallback seed, UI tokens | done |
-| Phase 1 | Foundation, contract, migrations, seeds | not started |
+| Phase 1 | Foundation, contract, migrations, seeds | done |
 | Phase 2 | System B core | not started |
 | Phase 3 | System A store & outbox | not started |
 | Phase 4 | Completion, stock ledger, warranty | not started |
@@ -14,18 +14,19 @@
 | Phase 7 | Rehearsal & final demo check | not started |
 
 ## Session Details
-- **Last Completed Item:** Phase 0 Preflight & Clone complete. Extracted 24 verified GoodHand products across all 7 categories into `apps/store/public/_clone/products.json`, generated UI tokens in `packages/ui-tokens/tokens.json` & `index.ts`, and documented constraints in `docs/constraints.md`.
+- **Last Completed Item:** Phase 1 Foundation & Contract completed. Both Next.js 15 apps (`store` and `fsm`) scaffolded and build successfully with safety banners and `noindex`. OpenAPI 3.1 contract fully validated by Spectral with zero errors. All Zod generated schemas, logger redaction tests, and contract checks (`CL-01` to `CL-16`) pass.
 - **Decisions Made:**
-  - Initialized isolated git repository in `SYSINT_GOODHAND`.
-  - Installed pnpm 9 globally via npm.
   - Sourced product specifications directly from GoodHand verified catalog TSV in `..\goodhand`.
-  - Generated offline vector SVG assets for all 24 products under `apps/store/public/_clone/images/` to prevent broken images and avoid live site hotlinking.
+  - Configured `@prototype/logger` with strict Pino redaction rules covering all PII and sensitive headers.
+  - Configured `@prototype/contract` OpenAPI 3.1 specification for `OP-01` to `OP-12` with tagged namespaces.
+  - Aligned Philippine phone number validation to accept `^\+63[0-9]{8,10}$` to accommodate both mobile and landlines per TC-31.
+  - Scaffolding CI workflow (`ci.yml`) and 5-minute drain scheduler workflow (`drain.yml`).
 - **Assumptions Added:**
-  - Recorded in `docs/assumptions.md`.
+  - See `docs/assumptions.md`.
 - **Open Blockers:**
-  - H1-H5 pending human action (non-blocking for Phase 1 contract and foundation scaffolding).
+  - H1-H5 pending human action (non-blocking for Phase 2 implementation).
 - **Last Command That Ran Successfully:**
-  - `node scripts/clone-site.mjs`
+  - `pnpm test` (all workspace tests passing).
 
 ## Human Gates Status
 - **H1 (Vercel & GitHub linked):** `pending human`
