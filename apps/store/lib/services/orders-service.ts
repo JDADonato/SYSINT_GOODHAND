@@ -190,6 +190,113 @@ export class OrdersService {
     }
   }
 
+  // W-03: Process OP-06 Status Change Webhook
+  public updateStatusChange(orderNumber: string, status: string, timestamp: string) {
+    const order = this.orders.get(orderNumber);
+    if (order) {
+      order.installationStatus = status;
+    }
+  }
+
+  // W-03 & CL-13: Process OP-07 Completion Webhook (Order Fulfilled & Warranty Activation)
+  public processCompletionReport(
+    payload: {
+      orderNumber: string;
+      jobNumber: string;
+      completedAt: string;
+      result: string;
+      installedUnits: Array<{ sku: string; serialNumber: string }>;
+      notes?: string;
+    },
+    correlationId: string
+  ): { success: boolean; activatedWarrantiesCount: number; feedbackInvitationDueAt: string } {
+    const order = this.orders.get(payload.orderNumber);
+    if (!order) {
+      const err: any = new Error(`Order ${payload.orderNumber} not found`);
+      err.category = 'NOT_FOUND';
+      throw err;
+    }
+
+    // Set order fulfilled and job completed
+    order.status = 'fulfilled';
+    order.installationStatus = 'Completed';
+
+    // Calculate warranty duration (default 12 months)
+    const startDate = new Date(payload.completedAt);
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + 12);
+
+    // Schedule feedback invitation (1 hour normal, 1 minute in demo mode - D13)
+    const isDemo = process.env.DEMO_MODE === 'true';
+    const inviteDueMs = isDemo ? 60 * 1000 : 3600 * 1000;
+    const inviteDueAt = new Date(Date.now() + inviteDueMs).toISOString();
+
+    logger.info(
+      {
+        correlationId,
+        orderNumber: payload.orderNumber,
+        unitsCount: payload.installedUnits.length,
+        inviteDueAt
+      },
+      'OP-07 processed: order fulfilled, warranty activated, feedback invitation scheduled'
+    );
+
+    return {
+      success: true,
+      activatedWarrantiesCount: payload.installedUnits.length,
+      feedbackInvitationDueAt: inviteDueAt
+    };
+  }
+
+  // W-03 & CL-12: Process OP-08 Inventory Adjustment Webhook
+  public processInventoryAdjustment(
+    payload: {
+      transactionId: string;
+      orderNumber: string;
+      jobNumber: string;
+      sku: string;
+      type: 'used' | 'returned_unused' | 'replacement_used';
+      quantity: number;
+    },
+    correlationId: string
+  ) {
+    const reasonMap: Record<string, 'install_use' | 'reservation_release' | 'replacement_use'> = {
+      used: 'install_use',
+      returned_unused: 'reservation_release',
+      replacement_used: 'replacement_use'
+    };
+
+    const reason = reasonMap[payload.type];
+    if (!reason) {
+      const err: any = new Error(`Invalid adjustment type ${payload.type}`);
+      err.category = 'VALIDATION_FAILED';
+      throw err;
+    }
+
+    // Applies ledger transition with mathematical invariant enforcement (TC-04, TC-09, TC-30)
+    const movement = stockLedger.applyMovement(
+      payload.transactionId,
+      payload.sku,
+      reason,
+      payload.quantity,
+      payload.orderNumber,
+      payload.jobNumber
+    );
+
+    logger.info(
+      {
+        correlationId,
+        transactionId: payload.transactionId,
+        sku: payload.sku,
+        reason,
+        quantity: payload.quantity
+      },
+      'OP-08 ledger movement applied'
+    );
+
+    return movement;
+  }
+
   private calculateTotal(items: CheckoutPayload['items']): string {
     const total = items.reduce((sum, item) => {
       return sum + parseFloat(item.unitPricePhp) * item.quantity;

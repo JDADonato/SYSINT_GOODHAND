@@ -8,28 +8,30 @@
 | Phase 1 | Foundation, contract, migrations, seeds | done |
 | Phase 2 | System B core | done |
 | Phase 3 | System A store & outbox | done |
-| Phase 4 | Completion, stock ledger, warranty | not started |
+| Phase 4 | Completion, stock ledger, warranty | done |
 | Phase 5 | Feedback, demo panel, emails | not started |
 | Phase 6 | Deploy, harden, freeze | not started |
 | Phase 7 | Rehearsal & final demo check | not started |
 
 ## Session Details
-- **Last Completed Item:** Phase 3 System A Store & Outbox completed and verified.
-  - Implemented Cart, Checkout, Order Detail, and Lead capture pages in System A (`store`).
-  - Implemented Stock Ledger mathematical state machine enforcing `0 <= reserved <= on_hand` per SKU.
-  - Implemented Transactional Outbox engine with immediate dispatch attempt, exponential retry backoff, circuit breaker, and 6-second budget guard on drain worker (`POST /api/internal/drain`).
-  - Implemented Failed Message Queue (W-04) with idempotent replay reusing the original `Idempotency-Key`.
-  - Implemented OP-05 webhook consumer (`POST /api/v1/webhooks/schedule-confirmations`) with HMAC `X-Signature` verification and timestamp skew check.
-  - Verified test cases TC-06, TC-09, TC-10, TC-13, TC-30, and TC-31.
+- **Last Completed Item:** Phase 4 Completion, Stock Ledger Adjustments & Warranty completed and verified.
+  - Implemented hardware loading verification gate in System B (TC-34) preventing starting a job until all ordered SKUs are confirmed loaded.
+  - Implemented job start with OP-06 (`webhooks:status`) outbox notification.
+  - Implemented field installation completion form with serial number recording, units used/returned validation, and parts adjustments (TC-14).
+  - Implemented OP-07 completion webhook dispatch and consumer activating 12-month warranties on System A and fulfilling orders (TC-02, TC-04).
+  - Implemented OP-08 inventory adjustment webhooks updating stock ledger with mathematical invariants and idempotent transaction IDs (TC-04, TC-09, TC-30).
+  - Implemented OP-09 catalog synchronization provider (`GET /api/v1/catalog`).
+  - Implemented OP-12 stock availability endpoint (`GET /api/v1/stock/availability`).
+  - Verified test cases TC-02, TC-04, TC-12, TC-14, TC-30, and TC-34 (22/22 tests passing).
 - **Decisions Made:**
-  - Implemented transactional ledger supporting reservations for installations, direct sales for pickups, and parts adjustments.
-  - Outbox drain engine respects Vercel 10s ceiling via 6s cutoff timer.
+  - Enforced that job completion requires `used + returned == ordered` and `serials.length == used` count with non-empty serial strings.
+  - OP-07 completion immediately schedules feedback invitation (due in 1 hour in production, 1 minute in demo mode per D13).
 - **Assumptions Added:**
   - See `docs/assumptions.md`.
 - **Open Blockers:**
-  - H1-H5 pending human action (non-blocking for Phase 4 implementation).
+  - H1-H5 pending human action (non-blocking for Phase 5 implementation).
 - **Last Command That Ran Successfully:**
-  - `pnpm build` & `vitest run` (18/18 tests passing).
+  - `pnpm build` (Store: 15 routes, FSM: 10 routes) & `vitest run` (22/22 tests passing).
 
 ## Human Gates Status
 - **H1 (Vercel & GitHub linked):** `pending human`

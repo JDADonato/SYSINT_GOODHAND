@@ -315,6 +315,256 @@ class JobsStore {
     return Array.from(this.jobs.values()).filter(j => j.technicianId === technicianId);
   }
 
+  // W-03 & TC-34: Hardware Loading Confirmation
+  public confirmLoading(jobNumber: string, sku: string, loadedQuantity: number): StoredJob {
+    const job = this.jobs.get(jobNumber);
+    if (!job) {
+      const err: any = new Error(`Job ${jobNumber} not found`);
+      err.category = 'NOT_FOUND';
+      throw err;
+    }
+
+    const item = job.items.find(i => i.sku === sku);
+    if (!item) {
+      const err: any = new Error(`SKU ${sku} not found on job ${jobNumber}`);
+      err.category = 'NOT_FOUND';
+      throw err;
+    }
+
+    item.loadedQuantity = loadedQuantity;
+    job.updatedAt = new Date().toISOString();
+    return job;
+  }
+
+  // W-03 & TC-34: Start Job (Enforces all ordered hardware is confirmed loaded)
+  public async startJob(
+    jobNumber: string,
+    correlationId: string
+  ): Promise<{ job: StoredJob; outboxMessage: OutboxMessage }> {
+    const job = this.jobs.get(jobNumber);
+    if (!job) {
+      const err: any = new Error(`Job ${jobNumber} not found`);
+      err.category = 'NOT_FOUND';
+      throw err;
+    }
+
+    if (job.status !== 'Scheduled') {
+      const err: any = new Error(`Job ${jobNumber} is not in Scheduled state (current: ${job.status})`);
+      err.category = 'BUSINESS_RULE_VIOLATED';
+      throw err;
+    }
+
+    // Guard: Every ordered SKU must have loadedQuantity == quantity
+    const unconfirmedItem = job.items.find(i => i.loadedQuantity < i.quantity);
+    if (unconfirmedItem) {
+      const err: any = new Error(
+        `Cannot start job: SKU ${unconfirmedItem.sku} is not fully loaded (${unconfirmedItem.loadedQuantity}/${unconfirmedItem.quantity})`
+      );
+      err.category = 'BUSINESS_RULE_VIOLATED';
+      throw err;
+    }
+
+    // Transition status to In Progress
+    job.status = 'In Progress';
+    job.updatedAt = new Date().toISOString();
+    job.version += 1;
+
+    // Write OP-06 outbox message
+    const outboxMessage: OutboxMessage = {
+      id: crypto.randomUUID(),
+      operationId: 'OP-06',
+      payload: {
+        jobNumber: job.jobNumber,
+        orderNumber: job.orderNumber,
+        status: 'In Progress',
+        timestamp: new Date().toISOString()
+      },
+      idempotencyKey: crypto.randomUUID(),
+      correlationId: correlationId || crypto.randomUUID(),
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+    this.outboxMessages.push(outboxMessage);
+
+    return { job, outboxMessage };
+  }
+
+  // W-03 & TC-14: Complete Job with Serials & Parts Adjustments (OP-07 & OP-08)
+  public async completeJob(
+    jobNumber: string,
+    completionData: {
+      result: 'success' | 'partial' | 'failed';
+      completedAt?: string;
+      notes?: string;
+      usedItems: Array<{ sku: string; quantity: number; serialNumbers: string[] }>;
+      returnedItems: Array<{ sku: string; quantity: number }>;
+      replacementItems?: Array<{ sku: string; quantity: number; reason?: string }>;
+    },
+    correlationId: string
+  ): Promise<{ job: StoredJob; op07Message: OutboxMessage; op08Messages: OutboxMessage[] }> {
+    const job = this.jobs.get(jobNumber);
+    if (!job) {
+      const err: any = new Error(`Job ${jobNumber} not found`);
+      err.category = 'NOT_FOUND';
+      throw err;
+    }
+
+    if (job.status !== 'In Progress') {
+      const err: any = new Error(`Job ${jobNumber} must be In Progress to complete (current: ${job.status})`);
+      err.category = 'BUSINESS_RULE_VIOLATED';
+      throw err;
+    }
+
+    // TC-14 Validation 1: Per ordered SKU, used + returned must equal ordered quantity
+    for (const orderedItem of job.items) {
+      const used = completionData.usedItems.find(u => u.sku === orderedItem.sku)?.quantity || 0;
+      const returned = completionData.returnedItems.find(r => r.sku === orderedItem.sku)?.quantity || 0;
+
+      if (used + returned !== orderedItem.quantity) {
+        const err: any = new Error(
+          `Quantity mismatch for ${orderedItem.sku}: used (${used}) + returned (${returned}) must equal ordered (${orderedItem.quantity})`
+        );
+        err.category = 'VALIDATION_FAILED';
+        throw err;
+      }
+    }
+
+    // TC-14 Validation 2: Serial count must equal used quantity for each used SKU
+    const allInstalledUnits: Array<{ sku: string; serialNumber: string }> = [];
+    for (const used of completionData.usedItems) {
+      if (used.serialNumbers.length !== used.quantity) {
+        const err: any = new Error(
+          `Serial count (${used.serialNumbers.length}) does not match used quantity (${used.quantity}) for ${used.sku}`
+        );
+        err.category = 'VALIDATION_FAILED';
+        throw err;
+      }
+      for (const sn of used.serialNumbers) {
+        if (!sn || sn.trim().length === 0) {
+          const err: any = new Error(`Invalid empty serial number for ${used.sku}`);
+          err.category = 'VALIDATION_FAILED';
+          throw err;
+        }
+        allInstalledUnits.push({ sku: used.sku, serialNumber: sn.trim() });
+      }
+    }
+
+    // Transition status to Completed
+    job.status = 'Completed';
+    job.updatedAt = new Date().toISOString();
+    job.version += 1;
+
+    const completedAt = completionData.completedAt || new Date().toISOString();
+
+    // 1. Write OP-07 (Completion Webhook) outbox message
+    const op07Message: OutboxMessage = {
+      id: crypto.randomUUID(),
+      operationId: 'OP-07',
+      payload: {
+        orderNumber: job.orderNumber,
+        jobNumber: job.jobNumber,
+        completedAt,
+        result: completionData.result,
+        installedUnits: allInstalledUnits,
+        notes: completionData.notes || 'Installation completed'
+      },
+      idempotencyKey: crypto.randomUUID(),
+      correlationId: correlationId || crypto.randomUUID(),
+      status: 'pending',
+      attempts: 0,
+      nextAttemptAt: new Date().toISOString(),
+      createdAt: new Date().toISOString()
+    };
+    this.outboxMessages.push(op07Message);
+
+    // 2. Write OP-08 (Inventory Adjustment Webhooks) with unique transactionId per adjustment line
+    const op08Messages: OutboxMessage[] = [];
+
+    // Used adjustments
+    for (const used of completionData.usedItems) {
+      if (used.quantity > 0) {
+        const op08Row: OutboxMessage = {
+          id: crypto.randomUUID(),
+          operationId: 'OP-08',
+          payload: {
+            transactionId: crypto.randomUUID(),
+            orderNumber: job.orderNumber,
+            jobNumber: job.jobNumber,
+            sku: used.sku,
+            type: 'used',
+            quantity: used.quantity
+          },
+          idempotencyKey: crypto.randomUUID(),
+          correlationId: correlationId || crypto.randomUUID(),
+          status: 'pending',
+          attempts: 0,
+          nextAttemptAt: new Date().toISOString(),
+          createdAt: new Date().toISOString()
+        };
+        op08Messages.push(op08Row);
+        this.outboxMessages.push(op08Row);
+      }
+    }
+
+    // Returned unused adjustments
+    for (const returned of completionData.returnedItems) {
+      if (returned.quantity > 0) {
+        const op08Row: OutboxMessage = {
+          id: crypto.randomUUID(),
+          operationId: 'OP-08',
+          payload: {
+            transactionId: crypto.randomUUID(),
+            orderNumber: job.orderNumber,
+            jobNumber: job.jobNumber,
+            sku: returned.sku,
+            type: 'returned_unused',
+            quantity: returned.quantity
+          },
+          idempotencyKey: crypto.randomUUID(),
+          correlationId: correlationId || crypto.randomUUID(),
+          status: 'pending',
+          attempts: 0,
+          nextAttemptAt: new Date().toISOString(),
+          createdAt: new Date().toISOString()
+        };
+        op08Messages.push(op08Row);
+        this.outboxMessages.push(op08Row);
+      }
+    }
+
+    // Replacement extra items adjustments
+    if (completionData.replacementItems) {
+      for (const rep of completionData.replacementItems) {
+        if (rep.quantity > 0) {
+          const op08Row: OutboxMessage = {
+            id: crypto.randomUUID(),
+            operationId: 'OP-08',
+            payload: {
+              transactionId: crypto.randomUUID(),
+              orderNumber: job.orderNumber,
+              jobNumber: job.jobNumber,
+              sku: rep.sku,
+              type: 'replacement_used',
+              quantity: rep.quantity
+            },
+            idempotencyKey: crypto.randomUUID(),
+            correlationId: correlationId || crypto.randomUUID(),
+            status: 'pending',
+            attempts: 0,
+            nextAttemptAt: new Date().toISOString(),
+            createdAt: new Date().toISOString()
+          };
+          op08Messages.push(op08Row);
+          this.outboxMessages.push(op08Row);
+        }
+      }
+    }
+
+    return { job, op07Message, op08Messages };
+  }
+
   public getOutboxMessages(): OutboxMessage[] {
     return this.outboxMessages;
   }
