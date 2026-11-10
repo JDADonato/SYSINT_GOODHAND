@@ -10,24 +10,28 @@
 | Phase 3 | System A store & outbox | done |
 | Phase 4 | Completion, stock ledger, warranty | done |
 | Phase 5 | Feedback, demo panel, emails | done |
-| Phase 6 | Deploy, harden, freeze | not started |
-| Phase 7 | Rehearsal & final demo check | not started |
+| Phase 6 | Deploy, harden, freeze | done |
+| Phase 7 | Rehearsal & final demo check | in progress |
 
 ## Session Details
-- **Last Completed Item:** Phase 5 Feedback, Demo Panels, Mail Log, and Follow-up Workflows completed and verified (34/34 tests passing).
-- **Current Focus:** Ready for Phase 6 - Deploy, harden, freeze (documentation, runbook, deployment guide, stock-ledger docs, demo script).
+- **Last Completed Item:** Phase 6 Deploy, Harden & Feature Freeze complete:
+  - Comprehensive architectural root `README.md` with Mermaid diagram, Windows setup, ports, commands, and seed credentials.
+  - Complete `docs/` suite: `docs/stock-ledger.md` (invariants & proofs), `docs/deployment.md` (multi-app Vercel/Neon deployment), `docs/api-register.md` (OP-01 to OP-12), `docs/demo-script.md` (7-minute presentation guide), `docs/runbook.md` (operations & disaster recovery), and `docs/qa-checklist.md` (manual QA verification matrix).
+  - Explicit prototype `terms` and `privacy` pages with academic disclaimers on both applications.
+  - 16/16 contract clauses verified by `scripts/contract-check.mjs`.
+  - 34/34 unit, contract, and interface tests passing via `pnpm test`.
+  - **Feature freeze active.**
+- **Current Focus:** Phase 7 - Final Rehearsal & Verification.
 - **Decisions Made:**
-  - Store tags never leave System A; only technician ratings, technician tags, and customer first name sent via OP-10/OP-11 (CL-15, TC-19, TC-32).
-  - Outage simulation toggle reads from `simulation_flags` table and triggers 503 SERVICE_UNAVAILABLE to verify outbox buffering.
-  - Strict 7-day editing window on feedback (D13, TC-27, TC-29).
-  - IDOR security guard on technician feedback view: querying another technician's reviews returns 404 (TC-28).
-  - Low ratings (≤ 2) automatically flag for review, create open follow-up tickets, and send email alerts (TC-24, D14).
+  - Standardized `package.json` test runner for seamless Windows PowerShell and CMD execution.
+  - Hardened privacy boundaries across all customer facing pages.
 - **Assumptions Added:**
   - See `docs/assumptions.md`.
 - **Open Blockers:**
-  - H1-H5 pending human action (ready for Phase 6 deployment).
+  - H1-H5 ready for human execution on live cloud infrastructure (non-blocking for local and container evaluation).
+  - H7 human rehearsal step for Day 7.
 - **Last Command That Ran Successfully:**
-  - Vitest test suite (34/34 passing).
+  - `pnpm test` (34/34 passing), `scripts/contract-check.mjs` (16/16 passing).
 
 ## Human Gates Status
 - **H1 (Vercel & GitHub linked):** `pending human`
@@ -39,4 +43,4 @@
 - **H7 (Rehearsal & backup screen recording):** `pending human` (Day 7)
 
 ## Not Built (SHOULD / COULD items deferred)
-- None yet.
+- None. All MUST and core SHOULD/COULD items implemented cleanly without TODOs or mocks in production paths.
