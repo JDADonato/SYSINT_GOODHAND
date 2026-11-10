@@ -19,6 +19,7 @@
       }
     ],
     "paths": {
+      "@/*": ["./*"],
       "@prototype/ui-tokens": ["../../packages/ui-tokens/index.ts"],
       "@prototype/ui": ["../../packages/ui/index.ts"],
       "@prototype/logger": ["../../packages/logger/index.ts"],

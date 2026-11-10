@@ -8,12 +8,13 @@
     "contract:lint": "pnpm --filter @prototype/contract lint",
     "contract:generate": "pnpm --filter @prototype/contract generate",
     "build": "pnpm -r --filter=./apps/* build",
-    "test": "pnpm -r test",
+    "test": "vitest run",
     "lint": "pnpm -r lint",
     "format": "prettier --write \"**/*.{ts,tsx,js,mjs,json,md,yaml}\""
   },
   "devDependencies": {
     "prettier": "^3.4.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
   }
 }
