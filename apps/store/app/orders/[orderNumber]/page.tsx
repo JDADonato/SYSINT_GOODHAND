@@ -4,6 +4,7 @@ import { ordersService } from '@/lib/services/orders-service';
 import { StatusChip } from '@prototype/ui';
 import { ShieldCheck, Calendar, Wrench, CheckCircle2, ArrowRight } from 'lucide-react';
 import type { JobStatus } from '@prototype/contract';
+import { FeedbackForm } from '@/components/FeedbackForm';
 
 export default async function OrderDetailPage({
   params
@@ -83,6 +84,13 @@ export default async function OrderDetailPage({
           </div>
         </div>
       </div>
+
+      {/* Feedback Card (W-05 / OBJ-04) */}
+      <FeedbackForm
+        orderNumber={orderNumber}
+        technicianName={order?.technicianName}
+        isCompleted={order?.installationStatus === 'Completed' || order?.status === 'fulfilled'}
+      />
 
       {/* Navigation Actions */}
       <div className="flex items-center justify-between pt-2">

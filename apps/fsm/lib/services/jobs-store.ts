@@ -3,8 +3,41 @@ import {
   CreateInstallationRequestSchema,
   type CreateInstallationRequest,
   type InstallationJobResponse,
-  type JobStatus
+  type JobStatus,
+  TechnicianFeedbackRequestSchema,
+  type TechnicianFeedbackRequest
 } from '@prototype/contract';
+import { mailService } from '../email/mail-service';
+
+export interface StoredTechnicianFeedback {
+  id: string;
+  jobId: string;
+  jobNumber: string;
+  technicianId: string;
+  rating: number;
+  comment?: string;
+  tags: string[];
+  customerFirstName: string;
+  receivedAt: string;
+  lockedAt?: string;
+  flaggedForReview: boolean;
+  sourceIdempotencyKey: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FeedbackFollowup {
+  id: string;
+  feedbackId: string;
+  jobNumber: string;
+  rating: number;
+  status: 'open' | 'in_progress' | 'resolved';
+  reason: string;
+  resolutionNote?: string;
+  assignedTo?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface StoredJob {
   id: string;
@@ -77,6 +110,8 @@ class JobsStore {
   private appointments: Appointment[] = [];
   private processedMessages: Map<string, ProcessedMessage> = new Map();
   private outboxMessages: OutboxMessage[] = [];
+  private technicianFeedbacks: Map<string, StoredTechnicianFeedback> = new Map();
+  private followups: FeedbackFollowup[] = [];
   private jobCounter = 1;
 
   constructor() {
@@ -567,6 +602,227 @@ class JobsStore {
 
   public getOutboxMessages(): OutboxMessage[] {
     return this.outboxMessages;
+  }
+
+  // W-05 & OP-10: Technician Feedback Submission
+  public async saveTechnicianFeedback(
+    jobNumber: string,
+    payload: any,
+    idempotencyKey: string,
+    correlationId: string
+  ): Promise<{ status: 200 | 201; body: { success: boolean; message: string } }> {
+    const requestHash = this.hashPayload(payload);
+
+    // 1. Idempotency Check (CL-07, TC-22)
+    const existingProcessed = this.processedMessages.get(idempotencyKey);
+    if (existingProcessed) {
+      if (existingProcessed.requestHash !== requestHash) {
+        const error: any = new Error('Reusing idempotency key with different payload');
+        error.category = 'IDEMPOTENCY_KEY_CONFLICT';
+        throw error;
+      }
+      return { status: 200, body: existingProcessed.responseBody };
+    }
+
+    // 2. Job Existence Check
+    const job = this.jobs.get(jobNumber);
+    if (!job) {
+      const error: any = new Error(`Job ${jobNumber} not found`);
+      error.category = 'NOT_FOUND';
+      throw error;
+    }
+
+    // 3. Duplicate check for same job under different idempotency key
+    if (this.technicianFeedbacks.has(jobNumber)) {
+      const error: any = new Error(`Feedback already recorded for job ${jobNumber}`);
+      error.category = 'DUPLICATE_RECORD';
+      throw error;
+    }
+
+    // 4. Job must be Completed (CL-15, TC-21)
+    if (job.status !== 'Completed') {
+      const error: any = new Error(`Job ${jobNumber} is not Completed (current status: ${job.status})`);
+      error.category = 'BUSINESS_RULE_VIOLATED';
+      error.statusCode = 422; // per TC-21: OP-10 for a job not Completed: 422
+      throw error;
+    }
+
+    // 5. Schema Validation (CL-01, CL-02, CL-15, TC-19, TC-25, TC-32)
+    const parsed = TechnicianFeedbackRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      const firstIssue = parsed.error.issues[0];
+      const error: any = new Error(firstIssue?.message || 'Validation failed');
+      error.category = 'VALIDATION_FAILED';
+      error.field = firstIssue?.path.join('.');
+      throw error;
+    }
+
+    const validData: TechnicianFeedbackRequest = parsed.data;
+
+    // 6. Persist Feedback
+    const feedback: StoredTechnicianFeedback = {
+      id: crypto.randomUUID(),
+      jobId: job.id,
+      jobNumber: job.jobNumber,
+      technicianId: job.technicianId || 'tech-default',
+      rating: validData.rating,
+      comment: validData.comment,
+      tags: (validData.technicianTags as string[]) || [],
+      customerFirstName: validData.customerFirstName,
+      receivedAt: validData.submittedAt || new Date().toISOString(),
+      flaggedForReview: validData.rating <= 2,
+      sourceIdempotencyKey: idempotencyKey,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    this.technicianFeedbacks.set(jobNumber, feedback);
+
+    // 7. Follow-up and Alert for low rating (TC-24, D14)
+    if (validData.rating <= 2) {
+      const followup: FeedbackFollowup = {
+        id: crypto.randomUUID(),
+        feedbackId: feedback.id,
+        jobNumber: job.jobNumber,
+        rating: validData.rating,
+        status: 'open',
+        reason: `Low technician rating of ${validData.rating}/5 received`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      this.followups.push(followup);
+
+      // Alert email to dispatcher
+      await mailService.sendEmail({
+        to: 'dispatch@goodhand88.com',
+        subject: `ALERT: Low Technician Rating (${validData.rating}/5) on ${jobNumber}`,
+        bodyHtml: `<h3>Low Feedback Alert</h3><p>Technician rating of ${validData.rating}/5 was received for job ${jobNumber}. Followup status is OPEN.</p>`
+      });
+    }
+
+    const responseBody = { success: true, message: 'Technician feedback recorded' };
+
+    this.processedMessages.set(idempotencyKey, {
+      idempotencyKey,
+      operationId: 'OP-10',
+      requestHash,
+      responseStatus: 201,
+      responseBody,
+      createdAt: new Date().toISOString()
+    });
+
+    return { status: 201, body: responseBody };
+  }
+
+  // W-05 & OP-11: Edit Technician Feedback (7-day window)
+  public async updateTechnicianFeedback(
+    jobNumber: string,
+    payload: any,
+    idempotencyKey: string,
+    correlationId: string
+  ): Promise<{ status: 200; body: { success: boolean; message: string } }> {
+    const requestHash = this.hashPayload(payload);
+
+    // 1. Idempotency Check
+    const existingProcessed = this.processedMessages.get(idempotencyKey);
+    if (existingProcessed) {
+      if (existingProcessed.requestHash !== requestHash) {
+        const error: any = new Error('Reusing idempotency key with different payload');
+        error.category = 'IDEMPOTENCY_KEY_CONFLICT';
+        throw error;
+      }
+      return { status: 200, body: existingProcessed.responseBody };
+    }
+
+    // 2. Feedback existence check
+    const feedback = this.technicianFeedbacks.get(jobNumber);
+    if (!feedback) {
+      const error: any = new Error(`Feedback for job ${jobNumber} not found`);
+      error.category = 'NOT_FOUND';
+      throw error;
+    }
+
+    // 3. 7-day editing window check (CL-15, D13, TC-27)
+    const receivedMs = new Date(feedback.receivedAt).getTime();
+    const nowMs = Date.now();
+    const sevenDaysMs = 7 * 24 * 60 * 60 * 1000;
+    if (nowMs - receivedMs > sevenDaysMs || feedback.lockedAt) {
+      const error: any = new Error('Feedback is locked after 7 days');
+      error.category = 'BUSINESS_RULE_VIOLATED';
+      throw error;
+    }
+
+    // 4. Schema Validation
+    const parsed = TechnicianFeedbackRequestSchema.safeParse(payload);
+    if (!parsed.success) {
+      const firstIssue = parsed.error.issues[0];
+      const error: any = new Error(firstIssue?.message || 'Validation failed');
+      error.category = 'VALIDATION_FAILED';
+      error.field = firstIssue?.path.join('.');
+      throw error;
+    }
+
+    const validData: TechnicianFeedbackRequest = parsed.data;
+
+    // 5. Update feedback
+    feedback.rating = validData.rating;
+    feedback.comment = validData.comment;
+    feedback.tags = (validData.technicianTags as string[]) || [];
+    feedback.customerFirstName = validData.customerFirstName;
+    feedback.updatedAt = new Date().toISOString();
+    feedback.flaggedForReview = validData.rating <= 2;
+
+    const responseBody = { success: true, message: 'Technician feedback updated' };
+
+    this.processedMessages.set(idempotencyKey, {
+      idempotencyKey,
+      operationId: 'OP-11',
+      requestHash,
+      responseStatus: 200,
+      responseBody,
+      createdAt: new Date().toISOString()
+    });
+
+    return { status: 200, body: responseBody };
+  }
+
+  public getTechnicianFeedbackForJob(jobNumber: string): StoredTechnicianFeedback | undefined {
+    return this.technicianFeedbacks.get(jobNumber);
+  }
+
+  // TC-28: Technician opens another technician's feedback: 404 (IDOR guard)
+  public listFeedbackForTechnician(
+    technicianId: string,
+    requesterTechnicianId?: string
+  ): {
+    feedbacks: StoredTechnicianFeedback[];
+    averageRating: number;
+    totalReviews: number;
+  } {
+    if (requesterTechnicianId && requesterTechnicianId !== technicianId) {
+      const error: any = new Error('Resource not found');
+      error.category = 'NOT_FOUND';
+      throw error;
+    }
+
+    const list = Array.from(this.technicianFeedbacks.values()).filter(
+      fb => fb.technicianId === technicianId
+    );
+
+    const totalReviews = list.length;
+    const avg = totalReviews > 0
+      ? Number((list.reduce((sum, fb) => sum + fb.rating, 0) / totalReviews).toFixed(1))
+      : 0;
+
+    return { feedbacks: list, averageRating: avg, totalReviews };
+  }
+
+  public listAllFeedback(): StoredTechnicianFeedback[] {
+    return Array.from(this.technicianFeedbacks.values());
+  }
+
+  public listFollowups(): FeedbackFollowup[] {
+    return [...this.followups];
   }
 }
 

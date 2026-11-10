@@ -37,8 +37,16 @@ export default function TechnicianMyJobsPage() {
           <span className="text-xs text-blue-200 uppercase font-semibold">Technician Field App</span>
           <h1 className="text-lg font-bold">Arnel Mendoza (TECH-001)</h1>
         </div>
-        <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">
-          AM
+        <div className="flex items-center gap-2">
+          <Link
+            href="/technician/feedback"
+            className="text-xs bg-white/20 hover:bg-white/30 text-white font-semibold px-2.5 py-1.5 rounded-lg transition-colors"
+          >
+            ⭐ Reviews
+          </Link>
+          <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center font-bold text-sm">
+            AM
+          </div>
         </div>
       </div>
 

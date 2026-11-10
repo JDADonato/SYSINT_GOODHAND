@@ -21,9 +21,10 @@ export function createErrorResponse(
   category: ErrorCategory,
   message: string,
   correlationId?: string,
-  field?: string
+  field?: string,
+  statusOverride?: number
 ): NextResponse<StandardErrorPayload> {
-  const status = CategoryToStatus[category] || 500;
+  const status = statusOverride || CategoryToStatus[category] || 500;
   const refId = `ERR-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${crypto.randomBytes(3).toString('hex').toUpperCase()}`;
   const corrId = correlationId || crypto.randomUUID();
 
