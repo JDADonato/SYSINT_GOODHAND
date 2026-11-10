@@ -13,7 +13,7 @@ export async function runStoreSeed(poolOrDb) {
     throw new Error('Refusing to run seed in production without DEMO_MODE=true and --force-demo!');
   }
 
-  const productsPath = path.join(rootDir, 'apps', 'store', 'public', '_clone', 'products.json');
+  const productsPath = path.resolve(__dirname, '..', 'public', '_clone', 'products.json');
   if (!fs.existsSync(productsPath)) {
     throw new Error(`Products catalog not found at ${productsPath}`);
   }
